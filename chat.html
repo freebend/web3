@@ -1,0 +1,144 @@
+
+<html>
+<head>
+    <title>hi</title>
+</head>
+<body>
+<script>
+    /* === Help-Chat Widget Snippet =========================================== */
+    (function () {
+      const API_BASE   = 'https://mct5.47008-eth.workers.dev'; // <— change to your Worker
+      const STORAGE_KEY = 'cf_chat_room';
+      const PING_INTERVAL = 25_000;   // H
+    
+      /* ---------- helpers ---------------------------------------------------- */
+      const log = (...args) => console.log('[chat]', ...args);
+      const randId = () => Math.random().toString(36).slice(-8);
+    
+      /* ---------- DOM -------------------------------------------------------- */
+      const css = `
+        #chat-widget {
+          position: fixed;
+          bottom: 20px;
+          right: 20px;
+          z-index: 9999;
+          font-family: system-ui, sans-serif;
+        }
+        #chat-btn {
+          background: #0077ff;
+          color: #fff;
+          border: none;
+          padding: 12px 20px;
+          border-radius: 30px;
+          cursor: pointer;
+        }
+        #chat-frame {
+          width: 320px;
+          height: 400px;
+          border: 1px solid #ccc;
+          border-radius: 8px;
+          background: #fff;
+          display: none;
+          flex-direction: column;
+        }
+        #chat-messages {
+          flex: 1;
+          padding: 8px;
+          overflow-y: auto;
+          font-size: 14px;
+        }
+        #chat-input {
+          border-top: 1px solid #eee;
+          padding: 8px;
+          display: flex;
+        }
+        #chat-input input {
+          flex: 1;
+          padding: 6px;
+          border: 1px solid #ccc;
+          border-radius: 4px;
+        }
+      `;
+      const style = document.createElement('style');
+      style.textContent = css;
+      document.head.appendChild(style);
+    
+      const widget = document.createElement('div');
+      widget.id = 'chat-widget';
+      widget.innerHTML = `
+        <button id="chat-btn">💬 Chat</button>
+        <div id="chat-frame">
+          <div id="chat-messages"></div>
+          <div id="chat-input">
+            <input id="msg-input" placeholder="Type…" autocomplete="off"/>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(widget);
+    
+      const btn      = document.getElementById('chat-btn');
+      const frame    = document.getElementById('chat-frame');
+      const msgsDiv  = document.getElementById('chat-messages');
+      const input    = document.getElementById('msg-input');
+    
+      /* ---------- state ------------------------------------------------------ */
+      let roomId = localStorage.getItem(STORAGE_KEY);
+      let ws;
+      let pingTimer;
+    
+      /* ---------- UI helpers -------------------------------------------------- */
+      function addMsg(text, who = 'system') {
+        const div = document.createElement('div');
+        div.style.margin = '2px 0';
+        div.innerHTML = `<b>${who}:</b> ${text}`;
+        msgsDiv.appendChild(div);
+        msgsDiv.scrollTop = msgsDiv.scrollHeight;
+      }
+      function toggleFrame() {
+        frame.style.display = frame.style.display === 'flex' ? 'none' : 'flex';
+        if (!ws) connect();
+      }
+    
+      /* ---------- WebSocket --------------------------------------------------- */
+      async function connect() {
+        if (!roomId) {
+          const res = await fetch(`${API_BASE}/newRoom`, {method: 'POST'});
+          roomId = (await res.json()).roomId;
+          localStorage.setItem(STORAGE_KEY, roomId);
+        }
+        try {
+          ws = new WebSocket(`${API_BASE.replace('https','wss')}/ws/${roomId}`);
+        } catch {
+          addMsg('Cannot open chat. Please contact us at <a href="mailto:support@example.com">support@example.com</a>');
+          return;
+        }
+        ws.onopen    = () => log('connected');
+        ws.onclose   = () => {
+          log('disconnected');
+          clearInterval(pingTimer);
+          // 2. auto-create room_2 on reconnect if needed
+          if (roomId && !roomId.includes('_')) {
+            roomId = roomId + '_2';
+            localStorage.setItem(STORAGE_KEY, roomId);
+          }
+          setTimeout(connect, 2000); // simple reconnect
+        };
+        ws.onmessage = (e) => {
+          const m = JSON.parse(e.data);
+          if (m.type === 'system') addMsg(m.text, 'system');
+          else if (m.text) addMsg(m.text, m.from || 'agent');
+        };
+        pingTimer = setInterval(() => ws.readyState === 1 && ws.send(JSON.stringify({type:'ping'})), PING_INTERVAL);
+      }
+    
+      /* ---------- events ------------------------------------------------------ */
+      btn.addEventListener('click', toggleFrame);
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && input.value.trim()) {
+          ws.send(JSON.stringify({text: input.value}));
+          addMsg(input.value, 'you');
+          input.value = '';
+        }
+      });
+    })();
+    </script>
