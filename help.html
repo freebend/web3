@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Support Agent Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f4f4f4; }
+    .container { max-width: 1200px; margin: auto; display: flex; gap: 20px; }
+    .room-list { width: 300px; background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+    .room-list h2 { margin: 0 0 10px; }
+    .room { padding: 10px; border-bottom: 1px solid #ddd; cursor: pointer; }
+    .room:hover { background: #f0f0f0; }
+    .chat-area { flex: 1; background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); display: none; flex-direction: column; }
+    .chat-header { font-size: 18px; margin-bottom: 10px; }
+    .chat-messages { flex: 1; overflow-y: auto; border: 1px solid #ddd; padding: 10px; min-height: 300px; }
+    .chat-input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; margin-top: 10px; }
+    .error { color: red; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="room-list">
+      <h2>Active Rooms</h2>
+      <div id="rooms"></div>
+    </div>
+    <div class="chat-area" id="chatArea">
+      <div class="chat-header" id="chatHeader">Select a room to start chatting</div>
+      <div class="chat-messages" id="chatMessages"></div>
+      <input type="text" class="chat-input" id="chatInput" placeholder="Type a message..." disabled>
+    </div>
+  </div>
+  <script>
+    const WORKER_URL = 'https://mc10wo.47008-eth.workers.dev'; // Replace with your Worker URL
+    const AGENT_KEY = 'abc'; // Replace with actual agent key
+    const dashboardWs = new WebSocket(`${WORKER_URL}/ws/dashboard?agentKey=${AGENT_KEY}`);
+    const rooms = new Map(); // Track active rooms and their WebSockets
+    let activeRoomId = null;
+    let isTyping = false;
+
+    // DOM elements
+    const roomsDiv = document.getElementById('rooms');
+    const chatArea = document.getElementById('chatArea');
+    const chatHeader = document.getElementById('chatHeader');
+    const chatMessages = document.getElementById('chatMessages');
+    const chatInput = document.getElementById('chatInput');
+
+    // Handle dashboard WebSocket
+    dashboardWs.onopen = () => {
+      showMessage('Connected to dashboard', false);
+    };
+
+    dashboardWs.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'join' || msg.type === 'leave') {
+        updateRoomList(msg);
+      }
+    };
+
+    dashboardWs.onclose = () => {
+      showError('Disconnected from dashboard. Please refresh.');
+    };
+
+    dashboardWs.onerror = () => {
+      dashboardWs.close();
+    };
+
+    // Update room list based on join/leave events
+    function updateRoomList(msg) {
+      const roomId = msg.clientId.split('-')[0]; // Assume clientId starts with roomId
+      if (msg.type === 'join' && !msg.isAgent) {
+        if (!rooms.has(roomId)) {
+          rooms.set(roomId, { ws: null, participantCount: 0 });
+          addRoomToUI(roomId);
+        }
+        rooms.get(roomId).participantCount++;
+      } else if (msg.type === 'leave' && !msg.isAgent) {
+        const room = rooms.get(roomId);
+        if (room) {
+          room.participantCount--;
+          if (room.participantCount <= 0) {
+            rooms.delete(roomId);
+            removeRoomFromUI(roomId);
+            if (activeRoomId === roomId) {
+              closeActiveChat();
+            }
+          }
+        }
+      }
+    }
+
+    // Add room to UI
+    function addRoomToUI(roomId) {
+      const div = document.createElement('div');
+      div.className = 'room';
+      div.textContent = `Room ${roomId.slice(0, 8)}`;
+      div.onclick = () => joinRoom(roomId);
+      roomsDiv.appendChild(div);
+    }
+
+    // Remove room from UI
+    function removeRoomFromUI(roomId) {
+      const roomDiv = Array.from(roomsDiv.children).find(div => div.textContent.includes(roomId.slice(0, 8)));
+      if (roomDiv) roomDiv.remove();
+    }
+
+    // Join a room
+    function joinRoom(roomId) {
+      if (activeRoomId === roomId) return;
+      if (activeRoomId) closeActiveChat();
+
+      activeRoomId = roomId;
+      chatArea.style.display = 'flex';
+      chatHeader.textContent = `Chatting in Room ${roomId.slice(0, 8)}`;
+      chatInput.disabled = false;
+      chatMessages.innerHTML = '';
+
+      const ws = new WebSocket(`${WORKER_URL}/ws/${roomId}?agentKey=${AGENT_KEY}`);
+      rooms.set(roomId, { ...rooms.get(roomId), ws });
+
+      ws.onopen = () => {
+        showMessage('Connected to room', true);
+      };
+
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'text') {
+          showMessage(`${msg.senderId.slice(0, 8)}: ${msg.content}`, true);
+        } else if (msg.type === 'typing') {
+          showTyping(msg.senderId, msg.typing);
+        } else if (msg.type === 'join' && !msg.isAgent) {
+          showMessage(`Visitor ${msg.senderId.slice(0, 8)} joined`, true);
+        } else if (msg.type === 'leave' && !msg.isAgent) {
+          showMessage(`Visitor ${msg.senderId.slice(0, 8)} left`, true);
+        }
+      };
+
+      ws.onclose = () => {
+        showMessage('Disconnected from room', true);
+        closeActiveChat();
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+    }
+
+    // Close active chat
+    function closeActiveChat() {
+      if (activeRoomId && rooms.get(activeRoomId)?.ws) {
+        rooms.get(activeRoomId).ws.close();
+        rooms.set(activeRoomId, { ...rooms.get(activeRoomId), ws: null });
+      }
+      activeRoomId = null;
+      chatArea.style.display = 'none';
+      chatHeader.textContent = 'Select a room to start chatting';
+      chatInput.disabled = true;
+      chatMessages.innerHTML = '';
+      isTyping = false;
+    }
+
+    // Handle chat input
+    chatInput.addEventListener('input', () => {
+      const typing = chatInput.value.length > 0;
+      if (typing !== isTyping && activeRoomId) {
+        isTyping = typing;
+        sendMessage(activeRoomId, { type: 'typing', typing });
+      }
+    });
+
+    chatInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter' && chatInput.value.trim() && activeRoomId) {
+        sendMessage(activeRoomId, { type: 'text', content: chatInput.value.trim() });
+        chatInput.value = '';
+        isTyping = false;
+        sendMessage(activeRoomId, { type: 'typing', typing: false });
+      }
+    });
+
+    // Send a message to a room
+    function sendMessage(roomId, message) {
+      const ws = rooms.get(roomId)?.ws;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(message));
+      }
+    }
+
+    // Display a message
+    function showMessage(text, isChatArea) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      if (isChatArea) {
+        chatMessages.appendChild(div);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      } else {
+        roomsDiv.appendChild(div);
+        roomsDiv.scrollTop = roomsDiv.scrollHeight;
+      }
+    }
+
+    // Display typing indicator
+    function showTyping(senderId, typing) {
+      let indicator = document.getElementById(`typing-${senderId}`);
+      if (typing && !indicator) {
+        indicator = document.createElement('div');
+        indicator.id = `typing-${senderId}`;
+        indicator.textContent = `${senderId.slice(0, 8)} is typing...`;
+        chatMessages.appendChild(indicator);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      } else if (!typing && indicator) {
+        indicator.remove();
+      }
+    }
+
+    // Display error
+    function showError(text) {
+      const div = document.createElement('div');
+      div.className = 'error';
+      div.textContent = text;
+      roomsDiv.appendChild(div);
+      roomsDiv.scrollTop = roomsDiv.scrollHeight;
+    }
+  </script>
+</body>
+</html>
