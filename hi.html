@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>hi</title>
+</head>
+<body>
+  <h1>hi</h1>
+  <button onclick="callParent()">hi</button>
+  
+  <script>
+    function callParent() {
+      const message = {
+        type: "greeting",
+        content: "Hello from here"
+      };
+      window.parent.postMessage(message, "*");
+    }
+  </script>
+</body>
+</html>
